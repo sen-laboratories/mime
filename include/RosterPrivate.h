@@ -1,1 +1,0 @@
-/boot/home/Develop/haiku/headers/private/app/RosterPrivate.h
