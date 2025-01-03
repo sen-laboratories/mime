@@ -6,15 +6,20 @@
  * All rights reserved. Distributed under the terms of the MIT license.
  */
 
+#include <kernel/fs_index.h>
 #include <MimeType.h>
 #include <Path.h>
 #include <Resources.h>
 #include <stdio.h>
+#include <Volume.h>
+#include <VolumeRoster.h>
 
 status_t InstallMimeTypeFromResource(const char* path);
 status_t DeleteMimeType(const char* mimeType);
 status_t GetInstalledMimeTypes(const char* supertype, BMessage* types);
 void PrintUsage(const char* name);
+
+#define ATTR_INDEX "attr:searchable"
 
 int
 main(int argc, char** argv)
@@ -33,12 +38,12 @@ main(int argc, char** argv)
             printf("successfully installed MIME type %s.\n", argv[2]);
         }
     }
-    else if (strncmp(command, "delete", strlen("delete")) == 0) {
+    else if (strncmp(command, "uninstall", strlen("uninstall")) == 0) {
         result = DeleteMimeType(argv[2]);
         if (result != B_OK) {
-            fprintf(stderr, "failed to delete MIME type %s: %s\n", argv[2], strerror(result));
+            fprintf(stderr, "failed to uninstall MIME type %s: %s\n", argv[2], strerror(result));
         } else {
-            printf("successfully removed MIME type %s.\n", argv[2]);
+            printf("successfully uninstalled MIME type %s.\n", argv[2]);
         }
     }
     else if (strncmp(command, "list", strlen("list")) == 0) {
@@ -80,8 +85,13 @@ void PrintUsage(const char* progname) {
 
 status_t InstallMimeTypeFromResource(const char* path) {
     BResources resources(path);
-    status_t result;
-    if ((result = resources.InitCheck()) != B_OK) {
+    if (! BFile(path, B_READ_ONLY).IsReadable()) {
+        fprintf(stderr, "cannot read resources from path %s: check path is valid!\n", path);
+        return B_ERROR;
+    }
+
+    status_t result = resources.InitCheck();
+    if (result != B_OK) {
         fprintf(stderr, "error initializing resources from path %s: %s\n", path, strerror(result));
         return result;
     }
@@ -149,6 +159,32 @@ status_t InstallMimeTypeFromResource(const char* path) {
     attrInfo = resources.LoadResource(B_MESSAGE_TYPE, "META:ATTR_INFO", size);
     if (attrInfo != NULL && message.Unflatten(reinterpret_cast<const char*>(attrInfo)) == B_OK) {
         mimeType.SetAttrInfo(&message);
+
+        // check if attribute should be added to index
+        int32 indexAttrCount;
+        message.GetInfo(ATTR_INDEX, NULL, &indexAttrCount);
+        BVolume bootVolume; // FIXME
+        BVolumeRoster().GetBootVolume(&bootVolume);
+
+        for (int i = 0; i < indexAttrCount; i++) {
+            const char* attrName = message.GetString("attr:name", i, "");
+            const char* attrPublicName = message.GetString("attr:public_name", i, "");
+            uint32      attrType = message.GetUInt32("attr:type", i, B_STRING_TYPE);
+
+            if (message.GetBool("attr:searchable", i, false)) {
+                // add to index
+                printf("adding attribute %s ['%s'] to index...", attrPublicName, attrName);
+                int result = fs_create_index(bootVolume.Device(), attrName, attrType, 0);
+                if (result == 0) {
+                    printf("OK\n");
+                } else {
+                    printf("ERROR: %s\n", strerror(result));
+                }
+            } else {
+                printf("keeping attribute %s ['%s'] in index...", attrPublicName, attrName);
+                printf("OK\n");
+            }
+        }
     }
 
     // get icon
