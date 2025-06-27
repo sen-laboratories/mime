@@ -6,6 +6,7 @@
  * All rights reserved. Distributed under the terms of the MIT license.
  */
 
+#include <errno.h>
 #include <kernel/fs_index.h>
 #include <MimeType.h>
 #include <Path.h>
@@ -110,7 +111,7 @@ status_t InstallMimeTypeFromResource(const char* path) {
     const char* mime = reinterpret_cast<const char*>(type);
     mimeType.SetTo(mime);
     if (!mimeType.IsValid()) {
-        fprintf(stderr, "error initializing MIME type %s from resource %s: %s\n", mime, path, strerror(result));
+        fprintf(stderr, "invalid MIME type '%s' in resource %s: %s\n", mime, path, strerror(result));
         return result;
     }
     if (mimeType.IsInstalled()) {
@@ -171,18 +172,30 @@ status_t InstallMimeTypeFromResource(const char* path) {
             const char* attrPublicName = message.GetString("attr:public_name", i, "");
             uint32      attrType = message.GetUInt32("attr:type", i, B_STRING_TYPE);
 
-            if (message.GetBool("attr:searchable", i, false)) {
-                // add to index
-                printf("adding attribute %s ['%s'] to index...", attrPublicName, attrName);
-                int result = fs_create_index(bootVolume.Device(), attrName, attrType, 0);
-                if (result == 0) {
+            result = message.FindBool("attr:searchable", i);
+            if (result == B_OK) {
+                bool addToIndex = message.GetBool("attr:searchable", i);
+                int result = 0;
+                if (addToIndex) {
+                    // add to index
+                    printf("* adding attribute %s ['%s'] to index...", attrPublicName, attrName);
+                    result = fs_create_index(bootVolume.Device(), attrName, attrType, 0);
+                } else {
+                    printf("* removing attribute %s ['%s'] from index...", attrPublicName, attrName);
+                    result = fs_remove_index(bootVolume.Device(), attrName);
+                }
+
+                if (result == B_OK) {
                     printf("OK\n");
                 } else {
-                    printf("ERROR: %s\n", strerror(result));
+                    if (errno == B_FILE_EXISTS) {
+                        printf("EXISTS, skipping.\n");
+                    } else if (errno == B_ENTRY_NOT_FOUND) {
+                        printf("NOT FOUND, skipping.\n");
+                    } else {
+                        printf("ERROR: %s\n", strerror(errno));
+                    }
                 }
-            } else {
-                printf("keeping attribute %s ['%s'] in index...", attrPublicName, attrName);
-                printf("OK\n");
             }
         }
     }
